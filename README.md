@@ -1,0 +1,220 @@
+# api_command_queue
+
+`api_command_queue` is a pure Dart package for queueing retryable API commands with explicit serialization, trailing-edge debounce for single-replacement commands, and a framework-agnostic orchestrator.
+
+It is a good fit when you want:
+
+- retry and backoff for failed API work
+- optional queue-level concurrency limits
+- app-controlled pause/resume behavior
+- optimistic hooks that stay in application code
+- explicit JSON codecs without reflection
+
+It does not include:
+
+- HTTP clients or repository implementations
+- built-in persistence or hydration
+- auth or connectivity observers
+- framework-specific state management wrappers
+
+## Install
+
+```yaml
+dependencies:
+  api_command_queue: ^0.1.0
+```
+
+## Minimal Example
+
+```dart
+import 'package:api_command_queue/api_command_queue.dart';
+
+final class TodoPayload {
+  const TodoPayload(this.title);
+
+  final String title;
+
+  Map<String, dynamic> toJson() => {'title': title};
+
+  static TodoPayload fromJson(Object? json) {
+    final map = (json as Map).cast<String, dynamic>();
+    return TodoPayload(map['title'] as String);
+  }
+}
+
+final class CreateTodoCommand extends ApiCommand<TodoPayload,
+    ApiCommandRequest<TodoPayload>, TodoPayload, CreateTodoCommand> {
+  const CreateTodoCommand({
+    required super.uuid,
+    required super.request,
+    required super.strategy,
+    required super.status,
+    required super.attemptCount,
+    required super.firstFailureAt,
+    required super.lastUpdated,
+    super.apiResponse,
+  });
+
+  factory CreateTodoCommand.create(String title) {
+    return CreateTodoCommand(
+      uuid: ApiCommand.generateId(),
+      request: ApiCommandRequest(
+        ApiCommandRequestMethod.post,
+        TodoPayload(title),
+      ),
+      strategy: CommandReplaceStrategy.multiple,
+      status: ApiCommandStatus.idle,
+      attemptCount: 0,
+      firstFailureAt: null,
+      lastUpdated: DateTime.now(),
+    );
+  }
+
+  @override
+  Future<ApiCommandResponse<TodoPayload>?> execute() async {
+    return ApiCommandResponse(request.data, false, status: 201);
+  }
+
+  @override
+  TodoPayload? offlineResult() => request.data;
+
+  @override
+  TodoPayload mergePayload(TodoPayload update) => update;
+
+  @override
+  CreateTodoCommand copyWith({
+    ApiCommandRequest<TodoPayload>? request,
+    CommandReplaceStrategy? strategy,
+    ApiCommandStatus? status,
+    DateTime? lastUpdated,
+    int? attemptCount,
+    DateTime? firstFailureAt,
+    ApiCommandResponse<TodoPayload?>? apiResponse,
+  }) {
+    return CreateTodoCommand(
+      uuid: uuid,
+      request: request ?? this.request,
+      strategy: strategy ?? this.strategy,
+      status: status ?? this.status,
+      attemptCount: attemptCount ?? this.attemptCount,
+      firstFailureAt: firstFailureAt ?? this.firstFailureAt,
+      lastUpdated: lastUpdated ?? this.lastUpdated,
+      apiResponse: apiResponse ?? this.apiResponse,
+    );
+  }
+
+  @override
+  Object? requestDataToJson(TodoPayload requestData) => requestData.toJson();
+
+  @override
+  Object? responseDataToJson(TodoPayload? responseData) =>
+      responseData?.toJson();
+
+  static CreateTodoCommand fromJson(Map<String, dynamic> json) {
+    return CreateTodoCommand(
+      uuid: json['id'] as String,
+      request: ApiCommandRequest.fromJson(
+        (json['request'] as Map).cast<String, dynamic>(),
+        TodoPayload.fromJson,
+      ),
+      strategy: CommandReplaceStrategy.values.firstWhere(
+        (value) => value.name == json['strategy'] as String,
+      ),
+      status: ApiCommandStatus.values.firstWhere(
+        (value) => value.name == json['status'] as String,
+      ),
+      attemptCount: json['attemptCount'] as int,
+      firstFailureAt: json['firstFailureAt'] == null
+          ? null
+          : DateTime.parse(json['firstFailureAt'] as String),
+      lastUpdated: DateTime.parse(json['lastUpdated'] as String),
+      apiResponse: json['apiResponse'] == null
+          ? null
+          : ApiCommandResponse.fromJson(
+              (json['apiResponse'] as Map).cast<String, dynamic>(),
+              TodoPayload.fromJson,
+            ),
+    );
+  }
+}
+
+final class TodoQueue extends ApiCommandQueue<TodoPayload,
+    ApiCommandRequest<TodoPayload>, TodoPayload, CreateTodoCommand> {
+  TodoQueue() : super(commandFromJson: CreateTodoCommand.fromJson);
+}
+
+Future<void> main() async {
+  final queue = TodoQueue();
+  final orchestrator = ApiCommandOrchestrator(
+    commandQueues: {CreateTodoCommand: queue},
+  );
+
+  final optimistic = orchestrator.enqueue(CreateTodoCommand.create('Ship docs'));
+  print('Optimistic title: ${optimistic?.title}');
+
+  final result = await queue.results.first;
+  print('Completed ${result.command.uuid} success=${result.success}');
+
+  await orchestrator.close();
+}
+```
+
+The runnable package example lives at [`example/main.dart`](example/main.dart).
+
+## Serialization Contract
+
+- `ApiCommandRequest.toJson(encodePayload)`
+- `ApiCommandRequest.fromJson(..., decodePayload)`
+- `ApiCommandResponse.toJson(encodeData)`
+- `ApiCommandResponse.fromJson(..., decodeData)`
+
+`ApiCommand` subclasses provide request and response payload encoders through `requestDataToJson(...)` and `responseDataToJson(...)`.
+
+The package does not use reflection. Applications own payload decoding, command restoration, and any persistence layer built on top of the queue state.
+
+## Request Parameters
+
+`ApiCommandRequest.parameters` is an immutable map. Values must be JSON-safe when serialized:
+
+- `null`
+- `bool`
+- `num`
+- `String`
+- `List`
+- `Map<String, Object?>`
+
+Required named parameters use `getNamedParameter<T>()`, which throws a `StateError` for missing or wrong-typed values.
+
+## Optimistic Hooks
+
+`ApiCommand` keeps optimistic behavior in app code:
+
+- `offlineResult()` returns the immediate optimistic value after enqueue
+- `offlineRollback()` returns the compensating value when the command ultimately fails
+- `offlineMerge(apiResult)` lets the app merge a successful API payload back into local state
+
+The package stores and executes commands. It does not mutate your application state for you.
+
+## Processing Control
+
+`ApiCommandOrchestrator` is framework-agnostic. External code can decide when queues should run:
+
+- `pauseAll()`
+- `resumeAll()`
+- `setProcessingEnabled(bool enabled)`
+- `flushAll()`
+
+Single-replacement commands support true trailing-edge debounce. Every new enqueue resets the timer, and only the latest command is enqueued when the interval expires.
+
+## Logging
+
+Logging is disabled by default. If you want queue diagnostics, configure a logger:
+
+```dart
+configureApiCommandQueueLogger(
+  debug: (message) => print(message),
+  error: (message, {error, stackTrace}) {
+    print('$message: $error');
+  },
+);
+```

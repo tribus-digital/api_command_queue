@@ -1,0 +1,20 @@
+.dart_tool/
+.packages
+.codex
+
+# Flutter tooling
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# Build and coverage output
+build/
+coverage/
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
