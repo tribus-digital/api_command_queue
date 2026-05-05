@@ -3,6 +3,7 @@ import 'dart:async';
 import 'api_command_base.dart';
 import 'api_command_request.dart';
 import 'api_command_response.dart';
+import 'api_command_terminal_failure.dart';
 import 'logging.dart';
 import 'retry_policy.dart';
 import 'state_streamable.dart';
@@ -62,6 +63,7 @@ abstract base class ApiCommandQueue<
   ApiCommandQueue({
     required Command Function(Map<String, dynamic>) commandFromJson,
     RetryPolicy? retryPolicy,
+    this.terminalFailurePredicate,
     this.failedCapacity = 100,
     this.concurrencyLimit,
     this.defaultDebounce = Duration.zero,
@@ -73,17 +75,27 @@ abstract base class ApiCommandQueue<
         );
 
   final RetryPolicy _retryPolicy;
+  final Command Function(Map<String, dynamic>) _commandFromJson;
+
+  /// Queue-wide non-retryable failure predicate.
+  ///
+  /// This is evaluated after a command returns or throws a failed response, and
+  /// before retry policy exhaustion is checked. If this returns true, the
+  /// command is moved to the failed/dead-letter collection immediately.
+  final ApiCommandTerminalFailurePredicate<Result>? terminalFailurePredicate;
+
   final int? concurrencyLimit;
   final int failedCapacity;
-  final Command Function(Map<String, dynamic>) _commandFromJson;
 
   final Map<String, Command> _inFlight = {};
   final Set<Future<void>> _activeCommands = <Future<void>>{};
   final Map<Type, Timer> _debounceTimers = {};
   final Map<Type, _DebouncedCommandEntry<Command>> _debouncePending = {};
+
   final StreamController<SyncState<Payload, Request, Result, Command>>
       _stateController = StreamController<
           SyncState<Payload, Request, Result, Command>>.broadcast();
+
   final StreamController<ApiCommandResult<Command, Result>> _resultsController =
       StreamController<ApiCommandResult<Command, Result>>.broadcast();
 
@@ -219,7 +231,8 @@ abstract base class ApiCommandQueue<
           .key;
       if (existingKey.isNotEmpty) {
         logDebug(
-          '[$runtimeType] replacing existing ${command.runtimeType} (id=$existingKey)',
+          '[$runtimeType] replacing existing ${command.runtimeType} '
+          '(id=$existingKey)',
         );
         pending.remove(existingKey);
       }
@@ -321,9 +334,7 @@ abstract base class ApiCommandQueue<
     final tries = stored.attemptCount;
     final firstFail = stored.firstFailureAt;
 
-    if (tries >= _retryPolicy.maxAttempts ||
-        (firstFail != null &&
-            now.difference(firstFail) > _retryPolicy.maxAge)) {
+    if (_shouldDeadLetter(stored, now)) {
       logDebug('[$runtimeType] dead-lettering command ${command.uuid}');
       final deadLetter = stored.copyWith(
         status: ApiCommandStatus.error,
@@ -398,7 +409,14 @@ abstract base class ApiCommandQueue<
           lastUpdated: DateTime.now(),
         );
 
-        if (_shouldDeadLetter(failed, DateTime.now())) {
+        if (_isTerminalFailure(failed, failedResponse)) {
+          logDebug(
+            '[$runtimeType] terminal failure for command ${failed.uuid} '
+            '(status=${failedResponse.status}, error=${failedResponse.error})',
+          );
+          _moveToFailed(failed);
+          _emitResult(failed, failedResponse);
+        } else if (_shouldDeadLetter(failed, DateTime.now())) {
           _moveToFailed(failed);
           _emitResult(failed, failedResponse);
         } else {
@@ -423,7 +441,15 @@ abstract base class ApiCommandQueue<
       );
 
       onError(error, stackTrace);
-      if (_shouldDeadLetter(failed, DateTime.now())) {
+
+      if (_isTerminalFailure(failed, synthetic)) {
+        logDebug(
+          '[$runtimeType] terminal exception failure for command '
+          '${failed.uuid} (error=${synthetic.error})',
+        );
+        _moveToFailed(failed);
+        _emitResult(failed, synthetic);
+      } else if (_shouldDeadLetter(failed, DateTime.now())) {
         _moveToFailed(failed);
         _emitResult(failed, synthetic);
       } else {
@@ -432,6 +458,18 @@ abstract base class ApiCommandQueue<
     } finally {
       _inFlight.remove(command.uuid);
     }
+  }
+
+  bool _isTerminalFailure(
+    Command command,
+    ApiCommandResponse<Result?> response,
+  ) {
+    if (response.success) {
+      return false;
+    }
+
+    return (terminalFailurePredicate?.call(response) ?? false) ||
+        command.isTerminalFailure(response);
   }
 
   bool _shouldDeadLetter(Command command, DateTime now) {
@@ -465,8 +503,10 @@ abstract base class ApiCommandQueue<
 
     if (failed.length >= failedCapacity) {
       final sorted = failed.entries.toList()
-        ..sort((a, b) =>
-            _failureSortTime(a.value).compareTo(_failureSortTime(b.value)));
+        ..sort(
+          (a, b) =>
+              _failureSortTime(a.value).compareTo(_failureSortTime(b.value)),
+        );
       for (final entry in sorted.take(failed.length - failedCapacity + 1)) {
         failed.remove(entry.key);
       }

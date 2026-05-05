@@ -13,6 +13,7 @@ export 'src/api_command_queue.dart';
 export 'src/api_command_queue_logger.dart';
 export 'src/api_command_request.dart';
 export 'src/api_command_response.dart';
+export 'src/api_command_terminal_failure.dart';
 export 'src/json_codec.dart';
 export 'src/retry_policy.dart';
 export 'src/state_streamable.dart';

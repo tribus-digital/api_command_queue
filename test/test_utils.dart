@@ -56,6 +56,8 @@ class DummyCommand2 extends DummyCommand {
 class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
     DummyData, DummyCommand> {
   final bool willSucceed;
+  final ApiCommandResponse<DummyData>? failureResponse;
+  final ApiCommandTerminalFailurePredicate<DummyData>? terminalFailurePredicate;
 
   const DummyCommand._({
     required super.uuid,
@@ -67,6 +69,8 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
     super.firstFailureAt,
     super.apiResponse,
     this.willSucceed = true,
+    this.failureResponse,
+    this.terminalFailurePredicate,
   });
 
   factory DummyCommand.createPending({
@@ -74,6 +78,8 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
     required int value,
     CommandReplaceStrategy strategy = CommandReplaceStrategy.multiple,
     bool willSucceed = true,
+    ApiCommandResponse<DummyData>? failureResponse,
+    ApiCommandTerminalFailurePredicate<DummyData>? terminalFailurePredicate,
   }) {
     return DummyCommand._(
       uuid: id,
@@ -87,6 +93,8 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
       attemptCount: 0,
       lastUpdated: DateTime.now(),
       willSucceed: willSucceed,
+      failureResponse: failureResponse,
+      terminalFailurePredicate: terminalFailurePredicate,
     );
   }
 
@@ -96,12 +104,18 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
       return ApiCommandResponse<DummyData>(request.data, false, status: 200);
     }
 
-    return ApiCommandResponse<DummyData>(
-      null,
-      false,
-      status: 500,
-      error: 'forced failure',
-    );
+    return failureResponse ??
+        ApiCommandResponse<DummyData>(
+          null,
+          false,
+          status: 500,
+          error: 'forced failure',
+        );
+  }
+
+  @override
+  bool isTerminalFailure(ApiCommandResponse<DummyData?> response) {
+    return terminalFailurePredicate?.call(response) ?? false;
   }
 
   @override
@@ -124,6 +138,8 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
       firstFailureAt: firstFailureAt ?? this.firstFailureAt,
       apiResponse: apiResponse ?? this.apiResponse,
       willSucceed: willSucceed,
+      failureResponse: failureResponse,
+      terminalFailurePredicate: terminalFailurePredicate,
     );
   }
 

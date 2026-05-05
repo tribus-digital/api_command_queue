@@ -2,6 +2,11 @@ import 'dart:async';
 
 import 'package:api_command_queue/api_command_queue.dart';
 
+final _validationFailureRule = ApiCommandTerminalFailureRule<ExamplePayload>(
+  statusCodes: const {422},
+  dataMatches: (data) => data?.title == 'validation_rejected',
+);
+
 Future<void> main() async {
   await runExample();
 }
@@ -72,7 +77,27 @@ final class ExampleCommand extends ApiCommand<ExamplePayload,
   @override
   Future<ApiCommandResponse<ExamplePayload>?> execute() async {
     await Future<void>.delayed(const Duration(milliseconds: 10));
+    if (request.data.title == 'Already exists') {
+      return ApiCommandResponse<ExamplePayload>(
+        null,
+        false,
+        status: 409,
+        error: 'duplicate title',
+      );
+    }
+    if (request.data.title.trim().isEmpty) {
+      return ApiCommandResponse<ExamplePayload>(
+        const ExamplePayload('validation_rejected'),
+        false,
+        status: 422,
+      );
+    }
     return ApiCommandResponse<ExamplePayload>(request.data, false, status: 201);
+  }
+
+  @override
+  bool isTerminalFailure(ApiCommandResponse<ExamplePayload?> response) {
+    return _validationFailureRule.matches(response);
   }
 
   @override
@@ -143,6 +168,10 @@ final class ExampleQueue extends ApiCommandQueue<ExamplePayload,
   ExampleQueue()
       : super(
           commandFromJson: ExampleCommand.fromJson,
+          terminalFailurePredicate:
+              const ApiCommandTerminalFailureRule<ExamplePayload>(
+            statusCodes: {401, 403, 409},
+          ).matches,
           retryPolicy: const ExponentialBackoffRetryPolicy(
             maxAttempts: 1,
             initialDelay: Duration.zero,

@@ -142,17 +142,21 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
     final queues = _orderedQueues;
     if (flushConcurrency == null || flushConcurrency! <= 0) {
       logDebug(
-        '[Orchestrator] flushing all ${queues.length} queues in parallel (unlimited)',
+        '[Orchestrator] flushing all ${queues.length} queues in parallel '
+        '(unlimited)',
       );
       await Future.wait(queues.map((queue) => queue.flush()));
     } else {
       logDebug(
-        '[Orchestrator] flushAll() - ${queues.length} queues, running $flushConcurrency at once',
+        '[Orchestrator] flushAll() - ${queues.length} queues, running '
+        '$flushConcurrency at once',
       );
       for (var index = 0; index < queues.length; index += flushConcurrency!) {
         final batch = queues.skip(index).take(flushConcurrency!);
         logDebug(
-          '[Orchestrator] flushing batch ${index ~/ flushConcurrency! + 1}/${(queues.length / flushConcurrency!).ceil()}',
+          '[Orchestrator] flushing batch '
+          '${index ~/ flushConcurrency! + 1}/'
+          '${(queues.length / flushConcurrency!).ceil()}',
         );
         await Future.wait(batch.map((queue) => queue.flush()));
       }

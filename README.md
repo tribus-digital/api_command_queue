@@ -5,6 +5,7 @@
 It is a good fit when you want:
 
 - retry and backoff for failed API work
+- early exit for non-retryable response failures
 - optional queue-level concurrency limits
 - app-controlled pause/resume behavior
 - optimistic hooks that stay in application code
@@ -21,7 +22,7 @@ It does not include:
 
 ```yaml
 dependencies:
-  api_command_queue: ^0.1.0
+  api_command_queue: ^0.2.0
 ```
 
 ## Minimal Example
@@ -205,6 +206,47 @@ The package stores and executes commands. It does not mutate your application st
 - `flushAll()`
 
 Single-replacement commands support true trailing-edge debounce. Every new enqueue resets the timer, and only the latest command is enqueued when the interval expires.
+
+## Terminal Failures
+
+Terminal failures let a queue stop retrying responses that are known not to
+recover, such as validation errors, permission failures, duplicate writes, or
+domain-level rejection states. Matching commands move straight to the failed
+dead-letter collection and emit a final result after the current attempt.
+
+Use a queue-wide predicate when the rule applies to every command in the queue:
+
+```dart
+final class TodoQueue extends ApiCommandQueue<TodoPayload,
+    ApiCommandRequest<TodoPayload>, TodoPayload, CreateTodoCommand> {
+  TodoQueue()
+      : super(
+          commandFromJson: CreateTodoCommand.fromJson,
+          terminalFailurePredicate:
+              const ApiCommandTerminalFailureRule<TodoPayload>(
+            statusCodes: {400, 401, 403, 409, 422},
+          ).matches,
+        );
+}
+```
+
+Use `ApiCommand.isTerminalFailure(...)` for command-specific rules:
+
+```dart
+final _validationRule = ApiCommandTerminalFailureRule<TodoPayload>(
+  statusCodes: const {422},
+  dataMatches: (data) => data?.title == 'validation_rejected',
+);
+
+@override
+bool isTerminalFailure(ApiCommandResponse<TodoPayload?> response) {
+  return _validationRule.matches(response);
+}
+```
+
+`ApiCommandTerminalFailureRule` can match exact status codes, status predicates,
+response payload predicates, error predicates, or the full response. Successful
+`2xx` responses never match terminal-failure rules.
 
 ## Logging
 

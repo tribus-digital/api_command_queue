@@ -94,6 +94,14 @@ abstract class ApiCommand<Payload, Request extends ApiCommandRequest<Payload>,
   /// Executes the command and returns its API response.
   Future<ApiCommandResponse<Result?>?> execute();
 
+  /// Returns true when [response] should permanently fail this command without
+  /// any further retries.
+  ///
+  /// Override this in concrete commands for command-specific non-retryable
+  /// failures such as validation errors, forbidden operations, or domain-level
+  /// rejection states.
+  bool isTerminalFailure(ApiCommandResponse<Result?> response) => false;
+
   /// Returns the optimistic value that application code should apply when the
   /// command is enqueued.
   Result? offlineResult() => null;

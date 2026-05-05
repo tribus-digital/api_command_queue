@@ -14,6 +14,7 @@ final class TestQueue extends ApiCommandQueue<DummyData,
     super.retryPolicy,
     super.concurrencyLimit,
     super.failedCapacity,
+    super.terminalFailurePredicate,
   });
 }
 
@@ -131,6 +132,137 @@ void main() {
       expect(events.firstWhere((event) => event.command.uuid == 'fail').success,
           isFalse);
       await subscription.cancel();
+    });
+  });
+
+  group('terminal failures', () {
+    test('queue predicate moves a matching failure to failed immediately',
+        () async {
+      final queue = TestQueue(
+        commandFromJson: DummyCommand.fromJson,
+        retryPolicy: const ExponentialBackoffRetryPolicy(
+          maxAttempts: 3,
+          initialDelay: Duration.zero,
+          backoffFactor: 1.0,
+          maxDelay: Duration.zero,
+          maxAge: Duration(hours: 1),
+        ),
+        terminalFailurePredicate:
+            const ApiCommandTerminalFailureRule<DummyData>(
+          statusCodes: {400, 409},
+        ).matches,
+      );
+      final events = <ApiCommandResult<DummyCommand, DummyData>>[];
+      final subscription = queue.results.listen(events.add);
+
+      queue.addCommand(
+        DummyCommand.createPending(
+          id: 'terminal',
+          value: 7,
+          willSucceed: false,
+          failureResponse: ApiCommandResponse<DummyData>(
+            null,
+            false,
+            status: 409,
+            error: 'conflict',
+          ),
+        ),
+        processNow: true,
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(queue.state.pending, isEmpty);
+      expect(queue.state.failed.keys, equals({'terminal'}));
+      expect(queue.state.failed['terminal']!.attemptCount, equals(1));
+      expect(queue.state.failed['terminal']!.apiResponse!.status, equals(409));
+      expect(events.single.command.uuid, equals('terminal'));
+      expect(events.single.success, isFalse);
+
+      await subscription.cancel();
+    });
+
+    test('command predicate can mark domain failures as terminal', () async {
+      final rule = ApiCommandTerminalFailureRule<DummyData>(
+        dataMatches: (data) => data?.value == 422,
+      );
+
+      queue.addCommand(
+        DummyCommand.createPending(
+          id: 'domain-reject',
+          value: 1,
+          willSucceed: false,
+          failureResponse: ApiCommandResponse<DummyData>(
+            const DummyData(422),
+            false,
+            status: 422,
+          ),
+          terminalFailurePredicate: rule.matches,
+        ),
+        processNow: true,
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(queue.state.pending, isEmpty);
+      expect(queue.state.failed.keys, equals({'domain-reject'}));
+      expect(
+        queue.state.failed['domain-reject']!.attemptCount,
+        equals(1),
+      );
+    });
+
+    test('non-matching failures retry until retry policy exhausts', () async {
+      final queue = TestQueue(
+        commandFromJson: DummyCommand.fromJson,
+        retryPolicy: const ExponentialBackoffRetryPolicy(
+          maxAttempts: 2,
+          initialDelay: Duration.zero,
+          backoffFactor: 1.0,
+          maxDelay: Duration.zero,
+          maxAge: Duration(hours: 1),
+        ),
+        terminalFailurePredicate:
+            const ApiCommandTerminalFailureRule<DummyData>(
+          statusCodes: {400},
+        ).matches,
+      );
+
+      queue.addCommand(
+        DummyCommand.createPending(
+          id: 'retryable',
+          value: 8,
+          willSucceed: false,
+          failureResponse: ApiCommandResponse<DummyData>(
+            null,
+            false,
+            status: 503,
+            error: 'unavailable',
+          ),
+        ),
+        processNow: true,
+      );
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(queue.state.pending, isEmpty);
+      expect(queue.state.failed.keys, equals({'retryable'}));
+      expect(queue.state.failed['retryable']!.attemptCount, equals(2));
+    });
+
+    test('successful responses never match terminal failure rules', () {
+      final rule = ApiCommandTerminalFailureRule<DummyData>(
+        statusCodes: {200},
+        dataMatches: (data) => data?.value == 1,
+      );
+
+      final response = ApiCommandResponse<DummyData>(
+        const DummyData(1),
+        false,
+        status: 200,
+      );
+
+      expect(rule.matches(response), isFalse);
     });
   });
 
