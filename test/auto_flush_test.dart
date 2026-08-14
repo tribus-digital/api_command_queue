@@ -245,6 +245,67 @@ void main() {
       await orchestrator.close();
     });
 
+    test('joining a flush with nothing new does not cause a second walk', () async {
+      final queue = CountingQueue();
+      final orchestrator = ApiCommandOrchestrator(
+        commandQueues: {DummyCommand: queue},
+      );
+
+      queue.addCommand(
+        DummyCommand.createPending(
+          id: 'a',
+          value: 1,
+          executeDelay: const Duration(milliseconds: 50),
+        ),
+      );
+
+      final first = orchestrator.flushAll();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      final second = orchestrator.flushAll();
+
+      await Future.wait([first, second]);
+
+      expect(
+        queue.flushCount,
+        1,
+        reason: 'the joiner had nothing new, so re-walking every queue is noise',
+      );
+
+      await orchestrator.close();
+    });
+
+    test('reports itself busy for the whole walk, not just while sending', () async {
+      final queue = CountingQueue();
+      final orchestrator = ApiCommandOrchestrator(
+        commandQueues: {DummyCommand: queue},
+      );
+
+      final seen = <QueueFlushStatus>[];
+      orchestrator.stream.listen(seen.add);
+
+      queue.addCommand(
+        DummyCommand.createPending(
+          id: 'a',
+          value: 1,
+          executeDelay: const Duration(milliseconds: 20),
+        ),
+      );
+
+      await orchestrator.flushAll();
+
+      /// the controller is broadcast, so the closing emission reaches listeners
+      /// a microtask after the flush returns
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        seen.where((status) => status == QueueFlushStatus.idle).length,
+        1,
+        reason: 'a lull between commands is not the end of the flush, got $seen',
+      );
+
+      await orchestrator.close();
+    });
+
     test('work queued during a flush still gets a pass', () async {
       final queue = CountingQueue();
       final orchestrator = ApiCommandOrchestrator(

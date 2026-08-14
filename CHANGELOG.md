@@ -27,6 +27,12 @@
   Previously two callers - a startup flush and a sync, say - walked every
   queue independently.
 
+- A joined flush only makes a second pass if something is actually due behind
+  the one that just finished, rather than re-walking every queue to find out.
+
+- A lull between commands no longer reports the queues as idle while a flush
+  is still walking them.
+
 - The aggregate flush status is only emitted when it actually changes. Queues
   emit on every command they touch and most leave it where it was, so every
   listener was being woken dozens of times per flush for no change.

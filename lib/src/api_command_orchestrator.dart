@@ -157,7 +157,10 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
 
     if (activeQueues > 0 && activeCommands > 0) {
       _emitState(QueueFlushStatus.inProgress);
-    } else {
+    } else if (!_isFlushing) {
+      /// a lull between commands is not the end of a flush - reporting idle
+      /// while the walk is still going gives a consumer showing progress a
+      /// state that contradicts what is happening
       _emitState(QueueFlushStatus.idle);
     }
 
@@ -238,6 +241,12 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
   /// [flushAll] only processes what is currently due, so a consumer that wants
   /// retries to happen without waiting for the next user action can schedule
   /// its next flush against this.
+  /// Whether any queue has a command eligible to be sent right now.
+  bool get _hasWorkDue {
+    final due = nextDueAt;
+    return due != null && !due.isAfter(clock.now());
+  }
+
   DateTime? get nextDueAt {
     DateTime? earliest;
 
@@ -277,7 +286,11 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
       do {
         _flushRequestedAgain = false;
         await _flushOrderedQueues();
-      } while (_flushRequestedAgain && !_isClosed);
+
+        /// only worth another walk if something actually came due behind the
+        /// one just finished - a caller joining a long flush usually has
+        /// nothing new, and re-walking every queue to discover that is noise
+      } while (_flushRequestedAgain && !_isClosed && _hasWorkDue);
     } finally {
       _isFlushing = false;
       _flushRequestedAgain = false;
