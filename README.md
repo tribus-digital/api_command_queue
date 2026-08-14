@@ -222,8 +222,11 @@ usually enough. For consumers that would rather schedule explicitly:
 - `nextDueAt` — the earliest due time across the queue, or null if nothing is
   pending
 
-Nothing retries while no flush is running, which is usually what an offline-first
-app wants: a device nobody is using should not be burning attempts.
+Nothing retries while no flush is running. If the consumer's own triggers are
+not enough — a device sitting idle with a failed command will not retry at all —
+`ApiCommandOrchestrator(autoFlushWhenDue: true)` keeps a single timer set to the
+earliest `nextDueAt` and flushes when it fires. It is cancelled while processing
+is disabled and on close.
 
 ## Terminal Failures
 

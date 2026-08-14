@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0
+
+- Added `ApiCommandOrchestrator.autoFlushWhenDue`, off by default.
+
+  0.3.0 stopped `flush()` sleeping a failed command's backoff, which means a
+  retry now waits for something to trigger the next flush. A consumer driving
+  flushes from connectivity changes and user activity will not retry at all on
+  a device sitting idle - the ladder simply stops.
+
+  With this on, the orchestrator keeps a single timer set to the earliest
+  `nextDueAt` across its queues and flushes when it fires, so retries progress
+  on their own again. The timer is cancelled while processing is disabled and
+  on close, and has a one second floor so a due command a flush cannot clear
+  becomes a slow poll rather than a spin.
+
+  Consumers that already drive flushing on their own schedule do not need it.
+
 ## 0.3.0
 
 - Retry backoff is now scheduled rather than slept. `flush()` processes the
