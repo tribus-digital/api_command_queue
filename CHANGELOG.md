@@ -21,6 +21,12 @@
   not waiting for a flush, and reporting it as due made a caller scheduling
   against it fire repeatedly for as long as the request took.
 
+- `flushAll` joins a flush already in progress rather than starting a second
+  walk beside it, and asks the running one to make another pass before it
+  finishes so work queued behind the point it had reached is still sent.
+  Previously two callers - a startup flush and a sync, say - walked every
+  queue independently.
+
 - The aggregate flush status is only emitted when it actually changes. Queues
   emit on every command they touch and most leave it where it was, so every
   listener was being woken dozens of times per flush for no change.

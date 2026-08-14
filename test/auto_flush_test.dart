@@ -217,6 +217,69 @@ void main() {
     });
   });
 
+  /// Found on a device: a startup flush and a sync flush overlapped, and every
+  /// queue past the point they met was walked twice.
+  group('overlapping flushes', () {
+    test('a second call joins the running flush rather than walking again', () async {
+      final queue = CountingQueue();
+      final orchestrator = ApiCommandOrchestrator(
+        commandQueues: {DummyCommand: queue},
+      );
+
+      queue.addCommand(
+        DummyCommand.createPending(
+          id: 'a',
+          value: 1,
+          executeDelay: const Duration(milliseconds: 50),
+        ),
+      );
+
+      await Future.wait([orchestrator.flushAll(), orchestrator.flushAll()]);
+
+      expect(
+        queue.flushCount,
+        lessThanOrEqualTo(2),
+        reason: 'two callers should not mean two full walks per queue',
+      );
+
+      await orchestrator.close();
+    });
+
+    test('work queued during a flush still gets a pass', () async {
+      final queue = CountingQueue();
+      final orchestrator = ApiCommandOrchestrator(
+        commandQueues: {DummyCommand: queue},
+        processingEnabled: false,
+      );
+
+      queue.addCommand(
+        DummyCommand.createPending(
+          id: 'a',
+          value: 1,
+          executeDelay: const Duration(milliseconds: 50),
+        ),
+      );
+      orchestrator.resumeAll();
+
+      final first = orchestrator.flushAll();
+
+      /// arrives after the walk has started
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      queue.addCommand(DummyCommand.createPending(id: 'b', value: 2));
+      final second = orchestrator.flushAll();
+
+      await Future.wait([first, second]);
+
+      expect(
+        queue.state.pending,
+        isEmpty,
+        reason: 'joining a running flush must not mean the later work is skipped',
+      );
+
+      await orchestrator.close();
+    });
+  });
+
   test('the aggregate state is only announced when it changes', () {
     /// queues emit on every command they touch and most leave the aggregate
     /// where it was, so a listener was being woken dozens of times per flush

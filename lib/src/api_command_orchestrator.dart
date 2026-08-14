@@ -71,6 +71,8 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
   bool _processingEnabled;
   bool _isClosed = false;
   bool _isFlushing = false;
+  bool _flushRequestedAgain = false;
+  Completer<void>? _flushCompleter;
 
   @override
   QueueFlushStatus get state => _state;
@@ -251,17 +253,38 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
   }
 
   /// Flushes all registered queues, optionally limiting queue-level parallelism.
+  ///
+  /// Calling this while a flush is running joins that one rather than starting a
+  /// second walk alongside it, and asks it to make another pass before it
+  /// finishes - so work queued behind the point the walk had already reached is
+  /// still sent, without every queue being visited twice.
   Future<void> flushAll() async {
     _ensureOpen();
+
+    final inProgress = _flushCompleter;
+    if (inProgress != null) {
+      logDebug('[Orchestrator] flushAll() already in progress');
+      _flushRequestedAgain = true;
+      return inProgress.future;
+    }
+
+    final completer = Completer<void>();
+    _flushCompleter = completer;
     _isFlushing = true;
     _emitState(QueueFlushStatus.inProgress);
 
     try {
-      await _flushOrderedQueues();
+      do {
+        _flushRequestedAgain = false;
+        await _flushOrderedQueues();
+      } while (_flushRequestedAgain && !_isClosed);
     } finally {
       _isFlushing = false;
+      _flushRequestedAgain = false;
+      _flushCompleter = null;
       _emitState(QueueFlushStatus.idle);
       _scheduleNextFlush();
+      if (!completer.isCompleted) completer.complete();
     }
   }
 
