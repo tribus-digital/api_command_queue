@@ -17,6 +17,14 @@
 
   Consumers that already drive flushing on their own schedule do not need it.
 
+- `nextDueAt` no longer counts a command that is currently being sent. It is
+  not waiting for a flush, and reporting it as due made a caller scheduling
+  against it fire repeatedly for as long as the request took.
+
+- `flushAll` visits each queue once rather than once per command type it is
+  registered under. The repeats were no-ops, but they made the walk several
+  times longer than it needed to be and the ordering log unreadable.
+
 ## 0.3.0
 
 - Retry backoff is now scheduled rather than slept. `flush()` processes the

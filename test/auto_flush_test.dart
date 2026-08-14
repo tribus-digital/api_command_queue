@@ -21,6 +21,21 @@ final class TestQueue extends ApiCommandQueue<DummyData,
         );
 }
 
+/// Counts flushes so a queue registered under several command types can show
+/// whether it was walked more than once.
+final class CountingQueue extends ApiCommandQueue<DummyData,
+    ApiCommandRequest<DummyData>, DummyData, DummyCommand> {
+  CountingQueue() : super(commandFromJson: DummyCommand.fromJson);
+
+  int flushCount = 0;
+
+  @override
+  Future<void> flush() {
+    flushCount += 1;
+    return super.flush();
+  }
+}
+
 int _attempts(TestQueue queue, String id) =>
     queue.state.pending[id]?.attemptCount ?? -1;
 
@@ -145,6 +160,60 @@ void main() {
       async.elapse(const Duration(minutes: 1));
 
       expect(async.pendingTimers, isEmpty);
+    });
+  });
+
+  /// Found on a device: a write in flight for three seconds had the timer
+  /// firing on its one second floor the whole time, each firing walking every
+  /// queue to discover there was nothing it could do.
+  test('a command being executed is not reported as due', () {
+    fakeAsync((async) {
+      final queue = TestQueue();
+      final orchestrator = ApiCommandOrchestrator(
+        commandQueues: {DummyCommand: queue},
+        autoFlushWhenDue: true,
+      );
+
+      orchestrator.enqueue(
+        DummyCommand.createPending(
+          id: 'a',
+          value: 1,
+          executeDelay: const Duration(seconds: 3),
+        ),
+      );
+      async.flushMicrotasks();
+
+      expect(queue.inFlightCount, 1);
+      expect(
+        orchestrator.nextDueAt,
+        isNull,
+        reason: 'it is being sent right now - there is nothing to schedule for',
+      );
+
+      async.elapse(const Duration(seconds: 3));
+      async.flushMicrotasks();
+
+      expect(queue.state.pending, isEmpty);
+      expect(orchestrator.nextDueAt, isNull);
+
+      orchestrator.close();
+    });
+  });
+
+  test('each queue is flushed once however many command types it takes', () {
+    fakeAsync((async) {
+      final queue = CountingQueue();
+      final orchestrator = ApiCommandOrchestrator(
+        /// the usual shape: a create and a patch sharing one queue
+        commandQueues: {DummyCommand: queue, DummyCommand2: queue},
+      );
+
+      orchestrator.flushAll();
+      async.flushMicrotasks();
+
+      expect(queue.flushCount, 1);
+
+      orchestrator.close();
     });
   });
 

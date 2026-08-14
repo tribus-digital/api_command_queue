@@ -70,6 +70,7 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
   QueueFlushStatus _state = QueueFlushStatus.idle;
   bool _processingEnabled;
   bool _isClosed = false;
+  bool _isFlushing = false;
 
   @override
   QueueFlushStatus get state => _state;
@@ -107,6 +108,13 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
       return;
     }
 
+    /// a flush already running will pick up anything due, and reschedules when
+    /// it finishes - timing another one alongside it just walks every queue
+    /// again for nothing
+    if (_isFlushing) {
+      return;
+    }
+
     final due = nextDueAt;
     if (due == null) {
       return;
@@ -141,30 +149,46 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
     } else {
       _emitState(QueueFlushStatus.idle);
     }
+
+    /// when a command becomes due changes as queues work: one that fails is due
+    /// its backoff, one that finishes may leave nothing due at all, and a queue
+    /// processing an enqueue on its own never goes near [flushAll]. Scheduling
+    /// from here rather than from the few places that call it means the timer
+    /// tracks the queues instead of guessing at them.
+    _scheduleNextFlush();
   }
 
+  /// The queues to flush, in order, each appearing once.
+  ///
+  /// A queue is usually registered under more than one command type - a create
+  /// and a patch that share it - so walking [commandQueues] or [queueOrder]
+  /// naively visits the same queue repeatedly. The repeats are no-ops, since a
+  /// flush already running returns its in-progress future, but they make the
+  /// walk several times longer than it needs to be and the ordering log
+  /// impossible to read.
   List<AnyApiCommandQueueHandle> get _orderedQueues {
     final all = commandQueues;
-    if (queueOrder == null || queueOrder!.isEmpty) {
-      return all.values.toList();
-    }
-
     final result = <AnyApiCommandQueueHandle>[];
-    final used = <Type>{};
+    final seen = Set<AnyApiCommandQueueHandle>.identity();
 
-    for (final type in queueOrder!) {
-      if (!all.containsKey(type)) {
-        throw ArgumentError('No queue registered for type $type');
-      }
-      result.add(all[type]!);
-      used.add(type);
+    void add(AnyApiCommandQueueHandle queue) {
+      if (seen.add(queue)) result.add(queue);
     }
 
-    for (final entry in all.entries) {
-      if (!used.contains(entry.key)) {
-        result.add(entry.value);
+    if (queueOrder != null) {
+      for (final type in queueOrder!) {
+        final queue = all[type];
+        if (queue == null) {
+          throw ArgumentError('No queue registered for type $type');
+        }
+        add(queue);
       }
     }
+
+    for (final queue in all.values) {
+      add(queue);
+    }
+
     return result;
   }
 
@@ -214,8 +238,19 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
   /// Flushes all registered queues, optionally limiting queue-level parallelism.
   Future<void> flushAll() async {
     _ensureOpen();
+    _isFlushing = true;
     _emitState(QueueFlushStatus.inProgress);
 
+    try {
+      await _flushOrderedQueues();
+    } finally {
+      _isFlushing = false;
+      _emitState(QueueFlushStatus.idle);
+      _scheduleNextFlush();
+    }
+  }
+
+  Future<void> _flushOrderedQueues() async {
     final queues = _orderedQueues;
     if (flushConcurrency == null || flushConcurrency! <= 0) {
       logDebug(
@@ -238,9 +273,6 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
         await Future.wait(batch.map((queue) => queue.flush()));
       }
     }
-
-    _emitState(QueueFlushStatus.idle);
-    _scheduleNextFlush();
   }
 
   /// Pauses processing for all queues without removing pending commands.

@@ -320,6 +320,11 @@ abstract base class ApiCommandQueue<
     DateTime? earliest;
 
     for (final command in state.pending.values) {
+      /// a command being executed right now is not waiting for a flush, and
+      /// reporting it as due makes a caller scheduling against this spin for as
+      /// long as the request takes
+      if (_inFlight.containsKey(command.uuid)) continue;
+
       final due = nextAttemptAt(command);
       if (earliest == null || due.isBefore(earliest)) {
         earliest = due;

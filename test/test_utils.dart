@@ -57,6 +57,7 @@ class DummyCommand2 extends DummyCommand {
 class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
     DummyData, DummyCommand> {
   final bool willSucceed;
+  final Duration executeDelay;
   final ApiCommandResponse<DummyData>? failureResponse;
   final ApiCommandTerminalFailurePredicate<DummyData>? terminalFailurePredicate;
 
@@ -70,6 +71,7 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
     super.firstFailureAt,
     super.apiResponse,
     this.willSucceed = true,
+    this.executeDelay = Duration.zero,
     this.failureResponse,
     this.terminalFailurePredicate,
   });
@@ -79,6 +81,7 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
     required int value,
     CommandReplaceStrategy strategy = CommandReplaceStrategy.multiple,
     bool willSucceed = true,
+    Duration executeDelay = Duration.zero,
     ApiCommandResponse<DummyData>? failureResponse,
     ApiCommandTerminalFailurePredicate<DummyData>? terminalFailurePredicate,
   }) {
@@ -94,6 +97,7 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
       attemptCount: 0,
       lastUpdated: clock.now(),
       willSucceed: willSucceed,
+      executeDelay: executeDelay,
       failureResponse: failureResponse,
       terminalFailurePredicate: terminalFailurePredicate,
     );
@@ -101,6 +105,12 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
 
   @override
   Future<ApiCommandResponse<DummyData>> execute() async {
+    /// lets a test ask what the queue reports while a command is actually in
+    /// flight, rather than only before and after
+    if (executeDelay > Duration.zero) {
+      await Future<void>.delayed(executeDelay);
+    }
+
     if (willSucceed) {
       return ApiCommandResponse<DummyData>(request.data, false, status: 200);
     }
@@ -139,6 +149,7 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
       firstFailureAt: firstFailureAt ?? this.firstFailureAt,
       apiResponse: apiResponse ?? this.apiResponse,
       willSucceed: willSucceed,
+      executeDelay: executeDelay,
       failureResponse: failureResponse,
       terminalFailurePredicate: terminalFailurePredicate,
     );
