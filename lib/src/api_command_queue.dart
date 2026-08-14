@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:clock/clock.dart';
+
 import 'api_command_base.dart';
 import 'api_command_request.dart';
 import 'api_command_response.dart';
@@ -291,12 +293,47 @@ abstract base class ApiCommandQueue<
     }
   }
 
+  /// When [command] may next be attempted.
+  ///
+  /// One that has never failed is due immediately. One that has is due its
+  /// backoff after the attempt that failed, which [ApiCommand.lastUpdated]
+  /// records.
+  DateTime nextAttemptAt(Command command) {
+    if (command.attemptCount == 0) {
+      return command.lastUpdated;
+    }
+
+    return command.lastUpdated.add(
+      _retryPolicy.delayForAttempt(command.attemptCount),
+    );
+  }
+
+  /// The earliest time any pending command is due, or null if none are waiting
+  /// on backoff.
+  ///
+  /// Lets a caller schedule its next flush instead of polling for one.
+  DateTime? get nextDueAt {
+    DateTime? earliest;
+
+    for (final command in state.pending.values) {
+      final due = nextAttemptAt(command);
+      if (earliest == null || due.isBefore(earliest)) {
+        earliest = due;
+      }
+    }
+
+    return earliest;
+  }
+
   List<Command> _runnableCommands() {
+    final now = clock.now();
+
     return state.pending.values
         .where(
           (command) =>
               !_inFlight.containsKey(command.uuid) &&
-              command.status != ApiCommandStatus.loading,
+              command.status != ApiCommandStatus.loading &&
+              !now.isBefore(nextAttemptAt(command)),
         )
         .toList(growable: false);
   }
@@ -330,7 +367,7 @@ abstract base class ApiCommandQueue<
       return;
     }
 
-    final now = DateTime.now();
+    final now = clock.now();
     final tries = stored.attemptCount;
     final firstFail = stored.firstFailureAt;
 
@@ -363,9 +400,7 @@ abstract base class ApiCommandQueue<
     var currentCommand = stored;
     try {
       if (tries > 0) {
-        final delay = _retryPolicy.delayForAttempt(tries);
-        logDebug('[$runtimeType] retrying ${command.uuid} in $delay');
-        await Future.delayed(delay);
+        logDebug('[$runtimeType] retrying ${command.uuid}, attempt ${tries + 1}');
       }
 
       final latest = state.pending[command.uuid];
@@ -375,7 +410,7 @@ abstract base class ApiCommandQueue<
 
       final loading = latest.copyWith(
         status: ApiCommandStatus.loading,
-        lastUpdated: DateTime.now(),
+        lastUpdated: clock.now(),
       );
       currentCommand = loading;
       _replacePending(loading);
@@ -389,11 +424,11 @@ abstract base class ApiCommandQueue<
         final done = loading.copyWith(
           status: ApiCommandStatus.success,
           apiResponse: response,
-          lastUpdated: DateTime.now(),
+          lastUpdated: clock.now(),
         );
         _emitResult(done, response!);
       } else {
-        final failTime = firstFail ?? DateTime.now();
+        final failTime = firstFail ?? clock.now();
         final failedResponse = response ??
             ApiCommandResponse<Result?>(
               null,
@@ -406,7 +441,7 @@ abstract base class ApiCommandQueue<
           apiResponse: failedResponse,
           attemptCount: tries + 1,
           firstFailureAt: failTime,
-          lastUpdated: DateTime.now(),
+          lastUpdated: clock.now(),
         );
 
         if (_isTerminalFailure(failed, failedResponse)) {
@@ -416,7 +451,7 @@ abstract base class ApiCommandQueue<
           );
           _moveToFailed(failed);
           _emitResult(failed, failedResponse);
-        } else if (_shouldDeadLetter(failed, DateTime.now())) {
+        } else if (_shouldDeadLetter(failed, clock.now())) {
           _moveToFailed(failed);
           _emitResult(failed, failedResponse);
         } else {
@@ -437,7 +472,7 @@ abstract base class ApiCommandQueue<
         apiResponse: synthetic,
         attemptCount: tries + 1,
         firstFailureAt: failTime,
-        lastUpdated: DateTime.now(),
+        lastUpdated: clock.now(),
       );
 
       onError(error, stackTrace);
@@ -449,7 +484,7 @@ abstract base class ApiCommandQueue<
         );
         _moveToFailed(failed);
         _emitResult(failed, synthetic);
-      } else if (_shouldDeadLetter(failed, DateTime.now())) {
+      } else if (_shouldDeadLetter(failed, clock.now())) {
         _moveToFailed(failed);
         _emitResult(failed, synthetic);
       } else {
@@ -494,7 +529,7 @@ abstract base class ApiCommandQueue<
     final failed = Map<String, Command>.of(state.failed);
     pending.remove(command.uuid);
 
-    final now = DateTime.now();
+    final now = clock.now();
     failed.removeWhere(
       (_, queued) =>
           queued.firstFailureAt != null &&

@@ -207,6 +207,24 @@ The package stores and executes commands. It does not mutate your application st
 
 Single-replacement commands support true trailing-edge debounce. Every new enqueue resets the timer, and only the latest command is enqueued when the interval expires.
 
+## Retry Scheduling
+
+`flush()` processes the commands that are currently due and returns. It does not
+wait out a failed command's backoff — one that fails is left pending and becomes
+eligible again once its delay has passed, so a single failing command cannot hold
+a flush, or a queue, open for the length of its retry ladder.
+
+The consequence is that flushes have to happen often enough to pick commands up
+as they come due. Connectivity changes, app resume, and user-triggered syncs are
+usually enough. For consumers that would rather schedule explicitly:
+
+- `nextAttemptAt(command)` — when a given command is next eligible
+- `nextDueAt` — the earliest due time across the queue, or null if nothing is
+  pending
+
+Nothing retries while no flush is running, which is usually what an offline-first
+app wants: a device nobody is using should not be burning attempts.
+
 ## Terminal Failures
 
 Terminal failures let a queue stop retrying responses that are known not to

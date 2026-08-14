@@ -1,4 +1,5 @@
 import 'package:api_command_queue/api_command_queue.dart';
+import 'package:clock/clock.dart';
 
 class DummyData {
   final int value;
@@ -47,7 +48,7 @@ class DummyCommand2 extends DummyCommand {
       strategy: strategy,
       status: ApiCommandStatus.idle,
       attemptCount: 0,
-      lastUpdated: DateTime.now(),
+      lastUpdated: clock.now(),
       willSucceed: willSucceed,
     );
   }
@@ -91,7 +92,7 @@ class DummyCommand extends ApiCommand<DummyData, ApiCommandRequest<DummyData>,
       strategy: strategy,
       status: ApiCommandStatus.idle,
       attemptCount: 0,
-      lastUpdated: DateTime.now(),
+      lastUpdated: clock.now(),
       willSucceed: willSucceed,
       failureResponse: failureResponse,
       terminalFailurePredicate: terminalFailurePredicate,

@@ -1,7 +1,7 @@
 name: api_command_queue
 description: Pure Dart command queue primitives for retryable API work,
   terminal failures, and offline-first orchestration.
-version: 0.2.0
+version: 0.3.0
 homepage: https://github.com/tribus-digital/api_command_queue
 repository: https://github.com/tribus-digital/api_command_queue
 issue_tracker: https://github.com/tribus-digital/api_command_queue/issues
@@ -16,6 +16,9 @@ environment:
   sdk: ">=3.5.0 <4.0.0"
 
 dependencies:
+  # retry scheduling reads the current time - going through `clock` lets tests
+  # drive it with fake_async rather than waiting in real time
+  clock: ^1.1.2
   meta: ^1.16.0
   uuid: ^4.5.2
 
