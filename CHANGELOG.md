@@ -21,6 +21,14 @@
   not waiting for a flush, and reporting it as due made a caller scheduling
   against it fire repeatedly for as long as the request took.
 
+- The aggregate flush status is only emitted when it actually changes. Queues
+  emit on every command they touch and most leave it where it was, so every
+  listener was being woken dozens of times per flush for no change.
+
+- In-flight and active-queue counts are taken over distinct queues, so one
+  registered under a create and a patch no longer reports double what it is
+  doing.
+
 - `flushAll` visits each queue once rather than once per command type it is
   registered under. The repeats were no-ops, but they made the walk several
   times longer than it needed to be and the ordering log unreadable.

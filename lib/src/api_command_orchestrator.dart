@@ -85,6 +85,12 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
   bool get processingEnabled => _processingEnabled;
 
   void _emitState(QueueFlushStatus nextState) {
+    /// queues emit on every command they touch, and most of those leave the
+    /// aggregate exactly where it was. Re-announcing it wakes every listener
+    /// for nothing - and with the auto-flush timer rescheduling from the same
+    /// signal, does so several times per command.
+    if (nextState == _state) return;
+
     _state = nextState;
     if (!_stateController.isClosed) {
       _stateController.add(nextState);
@@ -137,7 +143,10 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
     int activeCommands = 0;
     int activeQueues = 0;
 
-    for (final queue in commandQueues.values) {
+    /// counted over distinct queues - a queue registered under a create and a
+    /// patch appears in the map twice, and would otherwise report double what
+    /// it is actually doing
+    for (final queue in _distinctQueues) {
       activeCommands += queue.inFlightCount;
       activeQueues += queue.state.flushStatus.isInProgress ? 1 : 0;
     }
@@ -192,6 +201,12 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
     return result;
   }
 
+  /// Every registered queue, once, however many command types it accepts.
+  Iterable<AnyApiCommandQueueHandle> get _distinctQueues {
+    final seen = Set<AnyApiCommandQueueHandle>.identity();
+    return commandQueues.values.where(seen.add);
+  }
+
   Result? enqueue<
       Payload,
       Result,
@@ -224,7 +239,7 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
   DateTime? get nextDueAt {
     DateTime? earliest;
 
-    for (final queue in commandQueues.values) {
+    for (final queue in _distinctQueues) {
       final due = queue.nextDueAt;
       if (due == null) continue;
       if (earliest == null || due.isBefore(earliest)) {

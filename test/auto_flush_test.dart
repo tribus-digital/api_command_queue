@@ -217,6 +217,39 @@ void main() {
     });
   });
 
+  test('the aggregate state is only announced when it changes', () {
+    /// queues emit on every command they touch and most leave the aggregate
+    /// where it was, so a listener was being woken dozens of times per flush
+    fakeAsync((async) {
+      final queue = TestQueue();
+      final orchestrator = ApiCommandOrchestrator(
+        commandQueues: {DummyCommand: queue, DummyCommand2: queue},
+        autoFlushWhenDue: true,
+      );
+
+      final seen = <QueueFlushStatus>[];
+      orchestrator.stream.listen(seen.add);
+
+      for (var index = 0; index < 5; index += 1) {
+        orchestrator.enqueue(DummyCommand.createPending(id: '$index', value: index));
+      }
+      async.elapse(const Duration(seconds: 1));
+
+      expect(
+        seen,
+        everyElement(isA<QueueFlushStatus>()),
+        reason: 'sanity - the stream is wired up',
+      );
+      expect(
+        seen.length,
+        lessThanOrEqualTo(4),
+        reason: 'five commands should not mean dozens of identical emissions, got $seen',
+      );
+
+      orchestrator.close();
+    });
+  });
+
   test('the timer never fires faster than the floor', () {
     /// a due command that a flush cannot clear would otherwise reschedule
     /// instantly and spin
