@@ -75,6 +75,12 @@ final class FakeQueue implements AnyApiCommandQueueHandle {
     failed: {},
   );
 
+  /// set by tests that care when this queue reports work as due
+  DateTime? dueAt;
+
+  @override
+  DateTime? get nextDueAt => dueAt;
+
   @override
   int get inFlightCount => 0;
 
@@ -256,5 +262,36 @@ void main() {
     await orchestrator.flushAll();
 
     expect(callOrder, equals(['C', 'A', 'B']));
+  });
+
+  group('nextDueAt', () {
+    /// flushAll only processes what is due, so a consumer that wants a retry to
+    /// happen without waiting for the next user action needs to know when to
+    /// come back
+    test('is null when no queue has work waiting', () {
+      queueB = FakeQueue('B');
+      orchestrator = ApiCommandOrchestrator(
+        commandQueues: {FakeAnyCmd: queueA, int: queueB},
+      );
+
+      expect(orchestrator.nextDueAt, isNull);
+    });
+
+    test('reports the earliest across every queue', () {
+      final soon = DateTime.utc(2026, 1, 1, 12, 0, 30);
+      final later = DateTime.utc(2026, 1, 1, 12, 5);
+
+      queueB = FakeQueue('B');
+      queueC = FakeQueue('C');
+      queueA.dueAt = later;
+      queueB.dueAt = soon;
+      queueC.dueAt = null;
+
+      orchestrator = ApiCommandOrchestrator(
+        commandQueues: {FakeAnyCmd: queueA, int: queueB, String: queueC},
+      );
+
+      expect(orchestrator.nextDueAt, soon);
+    });
   });
 }

@@ -134,6 +134,26 @@ class ApiCommandOrchestrator implements StateStreamable<QueueFlushStatus> {
     return command.offlineResult();
   }
 
+  /// The earliest time any registered queue has work due, or null when nothing
+  /// is waiting.
+  ///
+  /// [flushAll] only processes what is currently due, so a consumer that wants
+  /// retries to happen without waiting for the next user action can schedule
+  /// its next flush against this.
+  DateTime? get nextDueAt {
+    DateTime? earliest;
+
+    for (final queue in commandQueues.values) {
+      final due = queue.nextDueAt;
+      if (due == null) continue;
+      if (earliest == null || due.isBefore(earliest)) {
+        earliest = due;
+      }
+    }
+
+    return earliest;
+  }
+
   /// Flushes all registered queues, optionally limiting queue-level parallelism.
   Future<void> flushAll() async {
     _ensureOpen();

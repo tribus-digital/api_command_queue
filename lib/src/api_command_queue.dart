@@ -30,6 +30,13 @@ abstract interface class ApiCommandQueueHandle<
   /// Emits final success and terminal failure events for processed commands.
   Stream<ApiCommandResult<Command, Result>> get results;
 
+  /// The earliest time a pending command is due, or null if none are waiting.
+  ///
+  /// A flush only processes what is currently due, so a consumer that wants
+  /// retries to happen without waiting for the next user action can schedule
+  /// against this rather than poll for one.
+  DateTime? get nextDueAt;
+
   /// Adds a command to the pending queue.
   void addCommand(
     covariant Command command, {
@@ -308,10 +315,7 @@ abstract base class ApiCommandQueue<
     );
   }
 
-  /// The earliest time any pending command is due, or null if none are waiting
-  /// on backoff.
-  ///
-  /// Lets a caller schedule its next flush instead of polling for one.
+  @override
   DateTime? get nextDueAt {
     DateTime? earliest;
 
